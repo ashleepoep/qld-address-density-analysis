@@ -1,0 +1,323 @@
+---
+title: "Queensland Address Density Analysis"
+author: "Ashlee Poeppmann"
+date: "2026-08-03"
+output: html_document
+---
+
+## Objective
+
+Which localities in Queensland have the highest density of addresses relative to land area?
+
+#will need to change to just SEQ (cut area in QSpatial) and test upload to Github.
+
+## Data Sources
+
+Need to add in where got from and metatdata and usage etc
+
+- Property Address Queensland (text data package \| GDA1994 EPSG:4283)
+
+- Locality Boundaries — Queensland (geodatabase \| GDA2020 EPSG:7844)
+
+- Some of the analysis I used
+
+## Definitions / Assumptions
+
+Localities = Suburbs
+
+## Methodology
+
+### 1 Loading and Preparing the Data
+
+```{r setup, include=FALSE}
+#Libraries
+library(sf)
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(leaflet)
+library(ggrepel)
+library(stringr)
+```
+
+#### 1.1 Queensland Locality Boundaries
+
+This data is supplied as a gdb, and already has it's datum set.
+
+```{r load locality boundaries}
+localities_sf <- st_read("data/LocalityBoundaries.gdb", layer = "Locality_Boundaries")
+```
+
+Queensland has a small number of locality names that repeat across different local government areas, Example: West End (Brisbane City) and West End (Townsville City). We'll need to join these to avoid duplication.
+
+```{r locality LGA}
+localities_sf <- localities_sf %>%
+  mutate(locality_base = str_remove(locality, " \\(.*\\)$"))
+
+dupe_names <- localities_sf %>%
+  st_drop_geometry() %>%
+  count(locality_base) %>%
+  filter(n > 1) %>%
+  pull(locality_base)
+
+localities_sf <- localities_sf %>%
+  mutate(locality = if_else(
+    locality_base %in% dupe_names,
+    paste0(locality_base, " (", lga, ")"),
+    locality_base
+  ))
+```
+
+Checking how the data looks, and confirming the datum = GDA2020.
+
+```{r check-localities}
+# Quick check data loaded correctly
+#total localities
+nrow(localities_sf)
+#Check Datum
+st_crs(localities_sf)$input
+
+
+#sanity check above (LGA) append worked
+localities_sf %>%
+  st_drop_geometry() %>%
+  filter(str_detect(locality, "West End")) %>%
+  select(locality, lga)
+
+#Quick map view
+localities_sf %>%
+  ggplot() +
+  geom_sf(fill = "lightblue", color = "darkblue", linewidth = 0.1) +
+  theme_minimal() +
+  labs(title = "Locality Boundaries")
+
+```
+
+#### 1.2 Property Address Queensland
+
+The data is supplied in a txt document, which includes a column on what datum to use, so I have loaded it in as EPSG:4283 GDA94.
+
+```{r load-addresses}
+addresses_raw <- read_delim(
+  "data/Property_address_Queensland.txt",
+  delim = "|",
+  col_types = cols(LATITUDE = col_double(), LONGITUDE = col_double(), .default = col_character())
+)
+
+addresses_sf <- st_as_sf(
+  addresses_raw,
+  coords = c("LONGITUDE", "LATITUDE"),
+  crs = 4283,
+  remove = FALSE
+)
+```
+
+We also only want the Status = P not A, as P = Primary address. Alternative addresses in the data are 'second' addresses, usually reserved for corner blocks.
+
+Locality boundary data is in GDA2020 while address data is in GDA94; all layers need to be transformed to a common CRS (GDA2020 EPSG:7844) prior to spatial analysis. GDA2020 is shiny, new and has a higher accuracy. Also future proofing for any future analysis with other layers that may be GDA2020.
+
+```{r addresses formating}
+#Only 'P' addresses
+addresses_primary <- addresses_sf %>%
+  filter(ADDRESS_STATUS == "P")
+
+addresses_primary <- st_transform(addresses_primary, crs = 7844)
+
+```
+
+Checking how the data looks and confirming the datum was properly set.
+
+```{r check-addresses}
+#total addresses
+nrow(addresses_primary)
+#Check Datum
+st_crs(addresses_primary)$input
+
+
+#Quick map view of a sample amount
+addresses_primary %>%
+  slice_sample(n = 5000) %>%
+  ggplot() +
+  geom_sf(size = 0.3, alpha = 0.3) +
+  theme_minimal() +
+  labs(title = "Sample of Primary Address points (n=5000)")
+```
+
+### 2. Spatial Join
+
+Taking each point in the address layer and finds which polygon (locality) it falls inside, then attaches that polygon's attributes to the point.
+
+```{r spatial join}
+#Spatial join 'within' - point must fall 'within' the polygon
+addresses_joined <- st_join(
+  addresses_primary,
+  localities_sf,
+  join = st_within
+)
+```
+
+Sanity Checking the join
+
+```{r join validation}
+#Number of rows from addresses
+nrow(addresses_primary)
+#nrow(addresses_joined)
+nrow(addresses_joined)
+#These two numbers should match if every point match
+```
+
+Result = 2739452. Both row count matches, meaning the join didn't create duplicates or drop any address points.
+
+Sanity check - checking whether each address's self-reported locality (from the original text file) agrees with the spatially-derived locality (form the join above)
+
+```{r data quality checking}
+addresses_joined <- addresses_joined %>%
+  mutate(
+    LOCALITY_stripped = str_remove(LOCALITY, " \\(.*\\)$"),
+    locality_stripped = str_remove(locality, " \\(.*\\)$"),
+    locality_match = toupper(LOCALITY_stripped) == toupper(locality_stripped) #toupper change case
+  )
+
+table(addresses_joined$locality_match, useNA = "ifany")
+mean(addresses_joined$locality_match, na.rm = TRUE) * 100
+```
+
+**4 points** = N/A, meaning these points didn't fall inside any locality polygon at all (likely just outside the Queensland border or off the coast).
+
+**2734925 points (99.83%**) = the address record's self-reported locality matches the locality polygon the point geographically falls inside
+
+**4523 points (\~0.17%)** = a mismatch between the two sources
+
+**Result** = \~99.38% agreement rate between two fields
+
+What boundaries causes the \~0.62% mismatch?
+
+```{r mismatch calc}
+
+mismatches <- addresses_joined %>%
+  filter(locality_match == FALSE) %>%
+  st_drop_geometry() %>%
+  count(LOCALITY, locality, sort = TRUE) %>%
+  head(20)
+
+mismatches
+
+```
+
+Most of these are data quality errors that are out of scope to clean now. One example is BELLS CREEK vs Aura Central. [Aura Central](https://haveyoursay.nrmmrrd.qld.gov.au/bells-creek-and-aura-central-place-name-proposal) is a newly created locality, as of 25th July. Addresses have not been updated yet. I'm happy with 99.38% result.
+
+How many addresses fall in each locality?
+
+```{r no. addresses in locality}
+address_counts <- addresses_joined %>%
+  st_drop_geometry() %>%
+  filter(!is.na(locality)) %>%
+  count(locality, name = "address_count")
+
+head(address_counts, 10)
+```
+
+### 3. Area/density calculation
+
+Density calculation — joining address counts to each locality's land area, then computing addresses per km2
+
+```{r density}
+locality_density <- address_counts %>%
+  left_join(
+    localities_sf %>% st_drop_geometry() %>% select(locality, ca_area_sqkm),
+    by = "locality"
+  ) %>%
+  mutate(density_per_sqkm = address_count / ca_area_sqkm)
+
+locality_density %>% arrange(desc(density_per_sqkm)) %>% head(10)
+```
+
+Top 10 localities ranked by address density per km2. Note: I've added a filter(address_count \>= 100) to exclude any locality with fewer than 100 addresses, so a tiny locality with a handful of addresses on a very small locality can't produce an artificially extreme density value.
+
+```{r - top 10 localities ranked by address density per km2}
+locality_density %>%
+  filter(address_count >= 100) %>%
+  arrange(desc(density_per_sqkm)) %>%
+  select(locality, address_count, ca_area_sqkm, density_per_sqkm) %>%
+  head(10)
+```
+
+A note for future configurations and fine tuning: joining the Local Government Areas to the above table, might help with a quick analysis of where the localities are in QLD.
+
+### 4. Visualize
+
+####4.1 Charts
+
+Bar charts
+
+```{r bar chart}
+locality_density %>%
+  arrange(desc(density_per_sqkm)) %>%
+  head(10) %>%
+  ggplot(aes(x = reorder(locality, density_per_sqkm), y = density_per_sqkm)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(density_per_sqkm, 0)), hjust = -0.1, size = 3) +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Top 10 Localities by Address Density",
+    x = NULL,
+    y = "Addresses per km2"
+  )
+```
+
+A scatterplot - log scale is used sic=nce most of the data is bunched at the low end.
+
+```{r scatterplot}
+
+area_count_outliers <- locality_density %>%
+  filter(address_count > 15000 | ca_area_sqkm > 20000)
+
+area_count_outliers %>% select(locality, address_count, ca_area_sqkm)
+
+locality_density %>%
+  ggplot(aes(x = ca_area_sqkm, y = address_count)) +
+  geom_point(alpha = 0.4, color = "steelblue") +
+  geom_point(data = area_count_outliers, color = "red", size = 2) +
+  geom_text_repel(data = area_count_outliers, aes(label = locality), size = 3) +
+  scale_x_log10() +
+  theme_minimal() +
+  labs(
+    title = "Address Count by Locality Land Area",
+    x = "Land Area (km2, log scale)", y = "Address Count"
+  )
+```
+
+####4.2 Maps Preparing data for map — joining calculated density statistics back onto the spatial polygons.Leaflet, like many web-based mapping tools and services — including Esri Feature Services, which I've worked with directly — requires coordinates in WGS84 (EPSG:4326) to render data correctly.
+
+```{r leaflet set up}
+localities_map_data <- localities_sf %>%
+  left_join(
+    locality_density %>% st_drop_geometry(),
+    by = "locality"
+  ) %>%
+  filter(address_count >= 100) %>%
+  st_transform(crs = 4326)  # WGS84, required for leaflet
+```
+
+Map building, centered on Brisbane as a whole state view doesn't show the high density places.
+
+```{r leaflet map}
+pal <- colorNumeric(palette = "YlOrRd", domain = localities_map_data$density_per_sqkm, na.color = "transparent")
+
+leaflet(localities_map_data) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng = 153.05, lat = -27.60, zoom = 9) %>%  # centered on South East Queensland
+  addPolygons(
+    fillColor = ~pal(density_per_sqkm),
+    fillOpacity = 0.7,
+    color = "white",
+    weight = 0.5,
+    label = ~paste0(locality, ": ", round(density_per_sqkm, 1), " addr/km²") %>% lapply(htmltools::HTML)
+  ) %>%
+  addLegend(pal = pal, values = ~density_per_sqkm, title = "Addresses per km²", position = "bottomright")
+```
+
+## Findings
+
+## Reflections
