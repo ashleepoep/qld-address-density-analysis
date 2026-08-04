@@ -1,0 +1,121 @@
+---
+title: "map_address_density_analys"
+output: html_document
+date: "2026-08-03"
+output:
+  html_document:
+    toc: true
+---
+
+
+Loading and Preparing the Data
+
+```{r setup, include=FALSE}
+#Libraries
+library(sf) #reading data
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(leaflet)
+library(ggrepel)
+library(stringr)
+```
+
+#### Queensland Locality Boundaries
+
+```{r}
+# Reading directly from an ArcGIS Feature Service REST endpoint
+localities_web <- read_sf("https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Boundaries/AdministrativeBoundaries/MapServer/2/query?where=lga+IN+%28%27Brisbane+City%27%2C+%27Gold+Coast+City%27%2C+%27Somerset+Regional%27%2C+%27Sunshine+Coast+Regional%27%2C+%27Moreton+Bay+City%27%2C+%27Redland+City%27%2C+%27Logan+City%27%2C+%27Noosa+Shire%27%2C+%27Scenic+Rim+Regional%27%2C+%27Ipswich+City%27%2C+%27Lockyer+Valley+Regional%27%2C+%27Toowoomba+Regional%27%29&outFields=*&returnGeometry=true&f=geojson")
+
+```
+
+Queensland has a number of locality names that repeat across different local government areas, Example: Tamborine (Logan City) and Tamborine (Scenic Rim Regional). We'll need to join these to avoid duplication in South East Queensland.
+
+```{r locality LGA}
+localities_web <- localities_web %>%
+  mutate(locality_base = str_remove(locality, " \\(.*\\)$"))
+
+dupe_names <- localities_web %>%
+  st_drop_geometry() %>%
+  count(locality_base) %>%
+  filter(n > 1) %>%
+  pull(locality_base)
+
+localities_web <- localities_web %>%
+  mutate(locality = if_else(
+    locality_base %in% dupe_names,
+    paste0(locality_base, " (", lga, ")"),
+    locality_base
+  ))
+
+#Force correct crs - in EPSG:4326 but we want 3857 for spatial data analysis
+localities_web <- st_transform(localities_web, crs = 3857)
+
+```
+
+
+#### Property Address Queensland
+
+The text data download includes a column on what datum to use, so I have loaded it in as EPSG:4283 GDA94. Plus I will convert the LOCAL_AUTHORITY field to sentence case sine they are all in capitals
+
+```{r load-addresses}
+#Read in text file and state delimeter.
+addresses_raw <- read_delim(
+  "data/Property_address_Queensland.txt",
+  delim = "|",
+  col_types = cols(LATITUDE = col_double(), LONGITUDE = col_double(), .default = col_character())
+)
+
+#add lat and longs from table
+addresses_sf <- st_as_sf(
+  addresses_raw,
+  coords = c("LONGITUDE", "LATITUDE"),
+  crs = 4283,
+  remove = FALSE
+)
+
+#change casing of LOCAL_AUTHORITY attributes
+addresses_sf <- addresses_sf %>%
+  mutate(LOCAL_AUTHORITY = str_to_title(LOCAL_AUTHORITY))
+```
+
+
+```{r addresses formating}
+#list of SEQ LGAs
+seq_lgas <- c(
+  "Brisbane City", "Gold Coast City", "Somerset Regional",
+  "Sunshine Coast Regional", "Moreton Bay City", "Redland City",
+  "Logan City", "Noosa Shire", "Scenic Rim Regional",
+  "Ipswich City", "Lockyer Valley Regional", "Toowoomba Regional"
+)
+
+addresses_seq <- addresses_sf %>%
+  filter(LOCAL_AUTHORITY %in% seq_lgas)
+
+#Only 'P' addresses
+addresses_primary <- addresses_seq %>%
+  filter(ADDRESS_STATUS == "P")
+
+#update crs
+addresses_primary <- st_transform(addresses_primary, crs = 3857)
+
+```
+
+
+```{r}
+
+pal <- colorNumeric(palette = "YlOrRd", domain = localities_map_data$density_per_sqkm, na.color = "transparent")
+
+leaflet(localities_map_data) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng = 153.05, lat = -27.60, zoom = 9) %>%  # centered on South East Queensland
+  addPolygons(
+    fillColor = ~pal(density_per_sqkm),
+    fillOpacity = 0.7,
+    color = "white",
+    weight = 0.5,
+    label = ~paste0(locality, ": ", round(density_per_sqkm, 1), " addr/km²") %>% lapply(htmltools::HTML)
+  ) %>%
+  addLegend(pal = pal, values = ~density_per_sqkm, title = "Addresses per km²", position = "bottomright")
+```
+
