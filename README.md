@@ -1,14 +1,12 @@
 ------------------------------------------------------------------------
 
-editor_options: markdown: wrap: 72 ---
-
 # South East Queensland Address Density Analysis
 
 A spatial data analysis project exploring address density across localities in South East Queensland, using R, spatial joins, and interactive mapping.
 
 ## View the Report
 
-[**Live interactive report →**](https://ashleepoep.github.io/qld-address-density-analysis/)
+[**Live interactive report →**](https://ashleepoep.github.io/qld-address-density-analysis/address_density_analysis.html)
 
 ## Objective
 
