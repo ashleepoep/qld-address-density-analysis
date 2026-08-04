@@ -1,37 +1,74 @@
 ---
-title: "Queensland Address Density Analysis"
+title: "South East Queensland Address Density Analysis"
 author: "Ashlee Poeppmann"
 date: "2026-08-03"
-output: html_document
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
 ---
 
 ## Objective
 
-Which localities in Queensland have the highest density of addresses relative to land area?
-
-#will need to change to just SEQ (cut area in QSpatial) and test upload to Github.
+Which localities in South East Queensland have the highest density of addresses relative to land area?
 
 ## Data Sources
 
-Need to add in where got from and metatdata and usage etc
+- **Locality Boundaries**
 
-- Property Address Queensland (text data package \| GDA1994 EPSG:4283)
+  - Feature Service \| WGS84 EPSG:3857
 
-- Locality Boundaries — Queensland (geodatabase \| GDA2020 EPSG:7844)
+  - Available here: <https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Boundaries/AdministrativeBoundaries/MapServer/2>
 
-- Some of the analysis I used
+  - 4.0 Creative Common Licence
 
-## Definitions / Assumptions
+  - Source: Queensland Department of Natural Resources and Mines, Manufacturing and Regional and Rural Development
 
-Localities = Suburbs
+  - While Queensland Locality Boundaries data is available in several formats, using a feature service enables real-time access to the most current, accurate data. This also makes the analysis more reproducible, since the code queries live data directly, it can be uploaded to GitHub and re-run in the future and will still reflect accurate, up-to-date locality boundaries, even as boundaries change over time.
+
+- **Property Address Queensland**
+
+  - Text data package \| GDA1994 EPSG:4283
+
+  - Downloaded from <https://www.data.qld.gov.au/dataset/property-address-queensland-by-area-of-interest>
+
+    - Clipped by South East Queensland (SEQ) extents
+
+  - 4.0 Creative Common Licence
+
+  - Source: Queensland Department of Natural Resources and Mines, Manufacturing and Regional and Rural Development
+
+  - While there is an Address Feature Service, there are 2,835,059 addresses in the data set for Queensland, and 1,979,261 for SEQ. This server's per-request limit is 10,000, and applies regardless of how the query is filtered. Pulling nearly 2 million rows via REST pagination would mean roughly 200+ separate paginated requests.
+
+## Definitions, Assumptions & Scope
+
+- Localities = Suburbs
+
+- Local Authority = Local Government Area (LGA)
+
+- South East Queensland (SEQ) = Brisbane City, Gold Coast City, Somerset Regional, Sunshine Coast Regional, Moreton Bay City, Redland City, Logan City, Noosa Shire, Scenic Rim Regional, Ipswich City, Lockyer Valley Regional, Toowoomba Regional
+
+- SEQ was chosen as it's a smaller selection of data that's easier to process for a simple analysis. Future analysis could contain all of Queensland.
+
+- WGS84 EPSG:3857 (Web Mercator) = 2D square measured in meters, used for data analysis.
+
+- WGS84 EPSG:4326 (Web Mercator) = uses latitude and longitude measured in degrees, for use in web based mapping.
+
+- The Property Address Queensland dataset does not represent residential addresses exclusively, it also includes addresses for businesses, services, and institutions such as hospitals, schools, and universities. Therefore this analysis does not measure residential population density, but rather address density: the concentration of all registered, addressable locations — residential, commercial, and institutional — within a given area.
+
+- A locality with a large hospital, university campus, or shopping precinct may consequently show high address density without a correspondingly high resident population.
+
+- This analysis was conducted using R, with Claude (Anthropic) used to assist in code generation, debugging, and troubleshooting throughout the development process. All analytical decisions, interpretation of results, and discussion presented in this report are my own.
 
 ## Methodology
 
-### 1 Loading and Preparing the Data
+### Loading and Preparing the Data
 
 ```{r setup, include=FALSE}
 #Libraries
-library(sf)
+library(sf) #reading data
 library(dplyr)
 library(readr)
 library(ggplot2)
@@ -40,88 +77,109 @@ library(ggrepel)
 library(stringr)
 ```
 
-#### 1.1 Queensland Locality Boundaries
+#### Queensland Locality Boundaries
 
-This data is supplied as a gdb, and already has it's datum set.
+```{r}
+# Reading directly from an ArcGIS Feature Service REST endpoint
+localities_web <- read_sf("https://spatial-gis.information.qld.gov.au/arcgis/rest/services/Boundaries/AdministrativeBoundaries/MapServer/2/query?where=lga+IN+%28%27Brisbane+City%27%2C+%27Gold+Coast+City%27%2C+%27Somerset+Regional%27%2C+%27Sunshine+Coast+Regional%27%2C+%27Moreton+Bay+City%27%2C+%27Redland+City%27%2C+%27Logan+City%27%2C+%27Noosa+Shire%27%2C+%27Scenic+Rim+Regional%27%2C+%27Ipswich+City%27%2C+%27Lockyer+Valley+Regional%27%2C+%27Toowoomba+Regional%27%29&outFields=*&returnGeometry=true&f=geojson")
 
-```{r load locality boundaries}
-localities_sf <- st_read("data/LocalityBoundaries.gdb", layer = "Locality_Boundaries")
 ```
 
-Queensland has a small number of locality names that repeat across different local government areas, Example: West End (Brisbane City) and West End (Townsville City). We'll need to join these to avoid duplication.
+Queensland has a number of locality names that repeat across different local government areas, Example: Tamborine (Logan City) and Tamborine (Scenic Rim Regional). We'll need to join these to avoid duplication in South East Queensland.
 
 ```{r locality LGA}
-localities_sf <- localities_sf %>%
+localities_web <- localities_web %>%
   mutate(locality_base = str_remove(locality, " \\(.*\\)$"))
 
-dupe_names <- localities_sf %>%
+dupe_names <- localities_web %>%
   st_drop_geometry() %>%
   count(locality_base) %>%
   filter(n > 1) %>%
   pull(locality_base)
 
-localities_sf <- localities_sf %>%
+localities_web <- localities_web %>%
   mutate(locality = if_else(
     locality_base %in% dupe_names,
     paste0(locality_base, " (", lga, ")"),
     locality_base
   ))
+
+#Force correct crs - in EPSG:4326 but we want 3857 for spatial data analysis
+localities_web <- st_transform(localities_web, crs = 3857)
+
 ```
 
-Checking how the data looks, and confirming the datum = GDA2020.
+Checking how the data looks, and confirming the datum.
 
 ```{r check-localities}
-# Quick check data loaded correctly
 #total localities
-nrow(localities_sf)
+nrow(localities_web)
 #Check Datum
-st_crs(localities_sf)$input
+st_crs(localities_web)$input
 
 
 #sanity check above (LGA) append worked
-localities_sf %>%
+localities_web %>%
   st_drop_geometry() %>%
-  filter(str_detect(locality, "West End")) %>%
+  filter(str_detect(locality, "Tamborine")) %>%
   select(locality, lga)
 
 #Quick map view
-localities_sf %>%
+localities_web %>%
   ggplot() +
   geom_sf(fill = "lightblue", color = "darkblue", linewidth = 0.1) +
   theme_minimal() +
-  labs(title = "Locality Boundaries")
+  labs(title = "Locality Boundaries SEQ")
 
 ```
 
-#### 1.2 Property Address Queensland
+#### Property Address Queensland
 
-The data is supplied in a txt document, which includes a column on what datum to use, so I have loaded it in as EPSG:4283 GDA94.
+The text data download includes a column on what datum to use, so I have loaded it in as EPSG:4283 GDA94. Plus I will convert the LOCAL_AUTHORITY field to sentence case sine they are all in capitals
 
 ```{r load-addresses}
+#Read in text file and state delimeter.
 addresses_raw <- read_delim(
   "data/Property_address_Queensland.txt",
   delim = "|",
   col_types = cols(LATITUDE = col_double(), LONGITUDE = col_double(), .default = col_character())
 )
 
+#add lat and longs from table
 addresses_sf <- st_as_sf(
   addresses_raw,
   coords = c("LONGITUDE", "LATITUDE"),
   crs = 4283,
   remove = FALSE
 )
+
+#change casing of LOCAL_AUTHORITY attributes
+addresses_sf <- addresses_sf %>%
+  mutate(LOCAL_AUTHORITY = str_to_title(LOCAL_AUTHORITY))
 ```
 
-We also only want the Status = P not A, as P = Primary address. Alternative addresses in the data are 'second' addresses, usually reserved for corner blocks.
+I need to filter out only SEQ. We also only want the Status = P not A, as P = Primary address. Alternative addresses in the data are 'second' addresses, usually reserved for corner blocks.
 
-Locality boundary data is in GDA2020 while address data is in GDA94; all layers need to be transformed to a common CRS (GDA2020 EPSG:7844) prior to spatial analysis. GDA2020 is shiny, new and has a higher accuracy. Also future proofing for any future analysis with other layers that may be GDA2020.
+Locality boundary data is in WGS84 EPSG:3857, while address data is in GDA94; all layers need to be transformed to a common CRS prior to spatial analysis. I've chosen WGS84 EPSG:3857 as later in this report we will be mapping to a web based application, which requires WGS84.
 
 ```{r addresses formating}
+#list of SEQ LGAs
+seq_lgas <- c(
+  "Brisbane City", "Gold Coast City", "Somerset Regional",
+  "Sunshine Coast Regional", "Moreton Bay City", "Redland City",
+  "Logan City", "Noosa Shire", "Scenic Rim Regional",
+  "Ipswich City", "Lockyer Valley Regional", "Toowoomba Regional"
+)
+
+addresses_seq <- addresses_sf %>%
+  filter(LOCAL_AUTHORITY %in% seq_lgas)
+
 #Only 'P' addresses
-addresses_primary <- addresses_sf %>%
+addresses_primary <- addresses_seq %>%
   filter(ADDRESS_STATUS == "P")
 
-addresses_primary <- st_transform(addresses_primary, crs = 7844)
+#update crs
+addresses_primary <- st_transform(addresses_primary, crs = 3857)
 
 ```
 
@@ -140,10 +198,10 @@ addresses_primary %>%
   ggplot() +
   geom_sf(size = 0.3, alpha = 0.3) +
   theme_minimal() +
-  labs(title = "Sample of Primary Address points (n=5000)")
+  labs(title = "Sample of Primary Address points in SEQ (n=5000)")
 ```
 
-### 2. Spatial Join
+### Spatial Join
 
 Taking each point in the address layer and finds which polygon (locality) it falls inside, then attaches that polygon's attributes to the point.
 
@@ -151,12 +209,12 @@ Taking each point in the address layer and finds which polygon (locality) it fal
 #Spatial join 'within' - point must fall 'within' the polygon
 addresses_joined <- st_join(
   addresses_primary,
-  localities_sf,
+  localities_web,
   join = st_within
 )
 ```
 
-Sanity Checking the join
+Sanity Checking the join:
 
 ```{r join validation}
 #Number of rows from addresses
@@ -166,9 +224,9 @@ nrow(addresses_joined)
 #These two numbers should match if every point match
 ```
 
-Result = 2739452. Both row count matches, meaning the join didn't create duplicates or drop any address points.
+Result = 1,889,301 Both row count matches, meaning the join didn't create duplicates or drop any address points.
 
-Sanity check - checking whether each address's self-reported locality (from the original text file) agrees with the spatially-derived locality (form the join above)
+Another sanity check - checking whether each address's self-reported locality (from the original text file) agrees with the spatially-derived locality (form the join above)
 
 ```{r data quality checking}
 addresses_joined <- addresses_joined %>%
@@ -182,15 +240,15 @@ table(addresses_joined$locality_match, useNA = "ifany")
 mean(addresses_joined$locality_match, na.rm = TRUE) * 100
 ```
 
-**4 points** = N/A, meaning these points didn't fall inside any locality polygon at all (likely just outside the Queensland border or off the coast).
+**13 points** = N/A, meaning these points didn't fall inside any locality polygon at all (likely just outside the SEQ area, data errors or boundaries that have not been updated).
 
-**2734925 points (99.83%**) = the address record's self-reported locality matches the locality polygon the point geographically falls inside
+**1,887,592 points (99.91%**) = the address record's self-reported locality matches the locality polygon the point geographically falls inside
 
-**4523 points (\~0.17%)** = a mismatch between the two sources
+**1,696 points (\~0.09%)** = a mismatch between the two sources
 
-**Result** = \~99.38% agreement rate between two fields
+**Result** = 99.91% agreement rate between two fields
 
-What boundaries causes the \~0.62% mismatch?
+What boundaries causes the \~0.09% mismatch?
 
 ```{r mismatch calc}
 
@@ -204,27 +262,25 @@ mismatches
 
 ```
 
-Most of these are data quality errors that are out of scope to clean now. One example is BELLS CREEK vs Aura Central. [Aura Central](https://haveyoursay.nrmmrrd.qld.gov.au/bells-creek-and-aura-central-place-name-proposal) is a newly created locality, as of 25th July. Addresses have not been updated yet. I'm happy with 99.38% result.
+Most of these are data quality errors that are out of scope to clean now. One example is BELLS CREEK vs Aura Central. [Aura Central](https://haveyoursay.nrmmrrd.qld.gov.au/bells-creek-and-aura-central-place-name-proposal) is a newly created locality, as of 25th July. Addresses have not been updated yet. I'm happy with 99.91% result.
 
-How many addresses fall in each locality?
+### Area/density calculation
+
+Get total of addresses per locality.
 
 ```{r no. addresses in locality}
 address_counts <- addresses_joined %>%
   st_drop_geometry() %>%
   filter(!is.na(locality)) %>%
   count(locality, name = "address_count")
-
-head(address_counts, 10)
 ```
-
-### 3. Area/density calculation
 
 Density calculation — joining address counts to each locality's land area, then computing addresses per km2
 
 ```{r density}
 locality_density <- address_counts %>%
   left_join(
-    localities_sf %>% st_drop_geometry() %>% select(locality, ca_area_sqkm),
+    localities_web %>% st_drop_geometry() %>% select(locality, ca_area_sqkm),
     by = "locality"
   ) %>%
   mutate(density_per_sqkm = address_count / ca_area_sqkm)
@@ -232,7 +288,9 @@ locality_density <- address_counts %>%
 locality_density %>% arrange(desc(density_per_sqkm)) %>% head(10)
 ```
 
-Top 10 localities ranked by address density per km2. Note: I've added a filter(address_count \>= 100) to exclude any locality with fewer than 100 addresses, so a tiny locality with a handful of addresses on a very small locality can't produce an artificially extreme density value.
+Top 10 localities ranked by address density per km2.
+
+Note: I've added a filter(address_count \>= 100) to exclude any locality with fewer than 100 addresses, so a tiny locality with a handful of addresses on a very small locality can't produce an artificially extreme density value (Like Enoggera Reservoir and Mount Coot-tha)
 
 ```{r - top 10 localities ranked by address density per km2}
 locality_density %>%
@@ -242,13 +300,13 @@ locality_density %>%
   head(10)
 ```
 
-A note for future configurations and fine tuning: joining the Local Government Areas to the above table, might help with a quick analysis of where the localities are in QLD.
+A note for future configurations and fine tuning: joining the Local Government Areas to the above table, might help with a quick analysis of where the localities are in SEQ.
 
-### 4. Visualize
+### Visualize
 
-####4.1 Charts
+#### Charts
 
-Bar charts
+Bar chart:
 
 ```{r bar chart}
 locality_density %>%
@@ -266,7 +324,7 @@ locality_density %>%
   )
 ```
 
-A scatterplot - log scale is used sic=nce most of the data is bunched at the low end.
+A scatter plot - log scale is used sicnce most of the data is bunched at the low end.
 
 ```{r scatterplot}
 
@@ -288,16 +346,18 @@ locality_density %>%
   )
 ```
 
-####4.2 Maps Preparing data for map — joining calculated density statistics back onto the spatial polygons.Leaflet, like many web-based mapping tools and services — including Esri Feature Services, which I've worked with directly — requires coordinates in WGS84 (EPSG:4326) to render data correctly.
+#### Maps
+
+Preparing data for map joining calculated density statistics back onto the spatial polygons. Leaflet, like many web-based mapping tools and services — including the web based Esri Feature Services, which I've worked with directly — requires coordinates in WGS84 (EPSG:3857) to render data correctly.
 
 ```{r leaflet set up}
-localities_map_data <- localities_sf %>%
+localities_map_data <- localities_web %>%
   left_join(
     locality_density %>% st_drop_geometry(),
     by = "locality"
   ) %>%
   filter(address_count >= 100) %>%
-  st_transform(crs = 4326)  # WGS84, required for leaflet
+  st_transform(crs = 4326)
 ```
 
 Map building, centered on Brisbane as a whole state view doesn't show the high density places.
@@ -320,4 +380,22 @@ leaflet(localities_map_data) %>%
 
 ## Findings
 
-## Reflections
+### Data Quality Observations
+
+Validation of the spatial join against self-reported locality data showed a 99.91% agreement rate (1,887,592 of 1,889,301 matched records), indicating strong overall consistency between Queensland's address register and locality boundary data sets.
+
+The residual 0.09% mismatch (1,696 records) was reviewed and found to be largely attributable to boundary/locality updates not yet reflected in address records — for example, addresses recorded under "Bells Creek" that now spatially fall within "Aura Central," a locality formally gazetted on 25 July [year], with address records not yet updated to reflect the change. This is considered an expected, minor lag between administrative data sets rather than a processing error.
+
+### Address Density Rankings
+
+The ten localities with the highest address density in South East Queensland (among localities with 100 or more addresses) were Newstead, Broadbeach, Fortitude Valley, Brisbane City, Kings Beach, South Brisbane, Teneriffe, Spring Hill, West End, and Surfers Paradise with densities ranging from 6,357 to 3,854 addresses per km2.
+
+Newstead recorded the highest address density in SEQ at 6,357 addresses per km2 despite ranking outside the top three by raw address count, its very small land area (0.90 km2) drives its density above larger, higher-count localities like Surfers Paradise (23,799 addresses, but 3,854 per km2 due to its comparatively larger 6.17 km2 footprint).
+
+### Geographic Patterns
+
+The interactive map shows density concentrated heavily around inner-Brisbane suburbs, with a sharp drop-off moving away from the CBD.
+
+The results are dominated by two clear clusters: inner-Brisbane, high-rise/mixed-use suburbs (Newstead, Fortitude Valley, Brisbane City, South Brisbane, Teneriffe, Spring Hill, West End) and Gold Coast/Sunshine Coast tourist and unit-development precincts (Broadbeach, Kings Beach, Surfers Paradise).
+
+This pattern is consistent with known development trends in SEQ, where high-density living is concentrated around the Brisbane CBD and coastal high-rise corridors.
