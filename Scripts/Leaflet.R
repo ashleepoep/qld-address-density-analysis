@@ -1,7 +1,4 @@
-
-
-
-
+#Keeping a copy og the code if need to replace with ggplot
 pal <- colorNumeric(palette = "YlOrRd", domain = localities_map_data$density_per_sqkm, na.color = "transparent")
 
 leaflet(localities_map_data) %>%

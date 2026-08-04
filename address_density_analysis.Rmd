@@ -363,13 +363,19 @@ localities_map_data <- localities_web %>%
 Map building, centered on SEQ.
 
 ```{r map }
-ggplot(localities_map_data) +
-  geom_sf(aes(fill = density_per_sqkm), color = "white", linewidth = 0.1) +
-  scale_fill_distiller(palette = "YlOrRd", direction = 1, name = "Addresses per km2") +
-  coord_sf(xlim = c(152.7, 153.5), ylim = c(-28.2, -26.9)) +
-  theme_minimal() +
-  labs(title = "Address Density by Locality, South East Queensland") + 
-  theme(legend.position = "bottom")
+pal <- colorNumeric(palette = "YlOrRd", domain = localities_map_data$density_per_sqkm, na.color = "transparent")
+
+leaflet(localities_map_data) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng = 153.05, lat = -27.60, zoom = 9) %>%  # centered on South East Queensland
+  addPolygons(
+    fillColor = ~pal(density_per_sqkm),
+    fillOpacity = 0.7,
+    color = "white",
+    weight = 0.5,
+    label = ~paste0(locality, ": ", round(density_per_sqkm, 1), " addr/km²") %>% lapply(htmltools::HTML)
+  ) %>%
+  addLegend(pal = pal, values = ~density_per_sqkm, title = "Addresses per km²", position = "bottomright")
 ```
 
 ## Findings
