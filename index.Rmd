@@ -44,7 +44,7 @@ Which localities in South East Queensland have the highest density of addresses 
 
 ## Definitions, Assumptions & Scope
 
-- Localities = Suburbs
+- - Localities and Suburbs = "suburbs" refer to urban areas, while rural and regional areas are referred to "localities". However "localities" can be used for both rural and urban, so "Localities" referencing will be used in this report.
 
 - Local Authority = Local Government Area (LGA)
 
@@ -85,7 +85,7 @@ localities_web <- read_sf("https://spatial-gis.information.qld.gov.au/arcgis/res
 
 ```
 
-Queensland has a number of locality names that repeat across different local government areas, Example: Tamborine (Logan City) and Tamborine (Scenic Rim Regional). We'll need to join these to avoid duplication in South East Queensland.
+Queensland has a number of locality names that repeat across different local government areas, Example: Tamborine (Logan City) and Tamborine (Scenic Rim Regional). To avoid duplication, I'll  join Locality to (LGA) for labeling purposes in the graphs and maps. (we could also use the column name = 'loc_code" but for labeling purposes I've gone with the names.)
 
 ```{r locality LGA}
 localities_web <- localities_web %>%

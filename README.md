@@ -14,6 +14,8 @@ Which localities in South East Queensland have the highest density of addresses 
 
 ## Overview
 
+I was first introduced to R at university but wanted to move beyond foundational familiarity, so I designed this project independently: a spatial analysis pipeline processing and analysing over 1.9 million address records across South East Queensland.
+
 This project was built as a self-directed learning exercise to demonstrate R and spatial analysis skills, using Queensland Government open data on addresses and locality boundaries. Key techniques include:
 
 - Spatial joins (`sf`) to assign addresses to locality boundaries
