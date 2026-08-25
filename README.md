@@ -6,7 +6,7 @@ A spatial data analysis project exploring address density across localities in S
 
 ## View the Report
 
-[**Live interactive report →**](https://ashleepoep.github.io/qld-address-density-analysis/address_density_analysis.html)
+[**Live interactive report →**](https://ashleepoep.github.io/qld-address-density-analysis/address_density_analysis/index.html)
 
 ## Objective
 
