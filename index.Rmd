@@ -44,7 +44,7 @@ Which localities in South East Queensland have the highest density of addresses 
 
 ## Definitions, Assumptions & Scope
 
-- - Localities and Suburbs = "suburbs" refer to urban areas, while rural and regional areas are referred to "localities". However "localities" can be used for both rural and urban, so "Localities" referencing will be used in this report.
+- Localities and Suburbs = "suburbs" refer to urban areas, while rural and regional areas are referred to "localities". However "localities" can be used for both rural and urban, so "Localities" referencing will be used in this report.
 
 - Local Authority = Local Government Area (LGA)
 
@@ -52,9 +52,9 @@ Which localities in South East Queensland have the highest density of addresses 
 
 - SEQ was chosen as it's a smaller selection of data that's easier to process for a simple analysis. Future analysis could contain all of Queensland.
 
-- WGS84 EPSG:3857 (Web Mercator) = 2D square measured in meters, used for data analysis.
+- WGS84 EPSG:4326 = a geographic coordinate system using latitude and longitude measured in degrees. Required by Leaflet and most web-based mapping libraries to render correctly; used in this project for the final interactive map only.
 
-- WGS84 EPSG:4326 (Web Mercator) = uses latitude and longitude measured in degrees, for use in web based mapping.
+- EPSG:3857 (Web Mercator) = a projected coordinate system measured in metres, widely used as the default system for web map tiles (e.g., OpenStreetMap, Google Maps). Used in this project as the common CRS for spatial joins and area calculations.
 
 - The Property Address Queensland dataset does not represent residential addresses exclusively, it also includes addresses for businesses, services, and institutions such as hospitals, schools, and universities. Therefore this analysis does not measure residential population density, but rather address density: the concentration of all registered, addressable locations — residential, commercial, and institutional — within a given area.
 
